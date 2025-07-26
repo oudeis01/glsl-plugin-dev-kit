@@ -21,7 +21,7 @@ class FunctionSignature:
 @dataclass
 class GLSLFunction:
     name: str
-    file_path: str  # relative to lygia folder
+    file_path: str  # relative to the directory that contains the .glsl files
     overloads: List[FunctionSignature]
 
 @dataclass
@@ -330,20 +330,6 @@ std::vector<std::string> getAllFunctionNames();
 
 }} // namespace {namespace_name}
 """)
-            
-            # Plugin info
-            f.write(f"""// Plugin Information
-extern const PluginInfo PLUGIN_INFO;
-
-// All Functions
-extern const std::vector<GLSLFunction> FUNCTIONS;
-
-// Utility functions
-const GLSLFunction* findFunction(const std::string& name);
-std::vector<std::string> getAllFunctionNames();
-
-}} // namespace {namespace_name}
-""")
         
         return str(output_path)
     
@@ -633,7 +619,7 @@ def parse_arguments():
         epilog="""
 Examples:
   python3 generate_glsl_plugin.py myshaders ./shaders ./output
-  python3 generate_glsl_plugin.py lygia /path/to/lygia /path/to/output --version 1.3.3 --author "Patricio Gonzalez Vivo"
+  python3 generate_glsl_plugin.py your_plugin_name /path/to/your/.glsl/folder /path/to/output --version 0.0.1 --author "unknown"
         """
     )
     
