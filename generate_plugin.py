@@ -328,7 +328,37 @@ extern const std::unordered_map<std::string, const GLSLFunction*> FUNCTION_MAP;
 const GLSLFunction* findFunction(const std::string& name);
 std::vector<std::string> getAllFunctionNames();
 
+// Plugin Implementation Class
+class PluginImpl : public IPluginInterface {{
+public:
+    // Plugin information
+    const char* getName() const override;
+    const char* getVersion() const override;
+    const char* getAuthor() const override;
+    
+    // Function search
+    const GLSLFunction* findFunction(const std::string& name) const override;
+    std::vector<std::string> getAllFunctionNames() const override;
+    size_t getFunctionCount() const override;
+    
+    // Category-based search
+    std::vector<std::string> getFunctionsByCategory(const std::string& category) const override;
+    std::vector<std::string> getAvailableCategories() const override;
+    
+    // Advanced queries
+    std::vector<const GLSLFunction*> findFunctionsByReturnType(const std::string& returnType) const override;
+    std::vector<const GLSLFunction*> findFunctionsByParameterCount(size_t paramCount) const override;
+}};
+
 }} // namespace {namespace_name}
+
+// C Interface for Dynamic Loading
+extern "C" {{
+    __attribute__((visibility("default"))) IPluginInterface* createPlugin();
+    __attribute__((visibility("default"))) void destroyPlugin(IPluginInterface* plugin);
+    __attribute__((visibility("default"))) const char* getPluginInfo();
+    __attribute__((visibility("default"))) int getPluginABIVersion();
+}}
 """)
         
         return str(output_path)
@@ -344,7 +374,7 @@ std::vector<std::string> getAllFunctionNames();
         namespace_name = f"{self.plugin_name.title()}Plugin"
 
         with open(output_path, 'w') as f:
-            f.write(f'#include "{header_filename}"\n#include <algorithm>\n#include <unordered_map>\n\nnamespace {namespace_name} {{\n\n')
+            f.write(f'#include "{header_filename}"\n#include <algorithm>\n#include <unordered_map>\n#include <set>\n\nnamespace {namespace_name} {{\n\n')
             
             # Plugin info
             f.write(f"""const PluginInfo PLUGIN_INFO("{plugin_info.name}", "{plugin_info.version}", "{plugin_info.author}");
@@ -379,21 +409,134 @@ std::vector<std::string> getAllFunctionNames();
             f.write("};\n\n")
             
             # Optimized utility functions
-            f.write("""const GLSLFunction* findFunction(const std::string& name) {
+            f.write(f"""const GLSLFunction* findFunction(const std::string& name) {{
     auto it = FUNCTION_MAP.find(name);
     return (it != FUNCTION_MAP.end()) ? it->second : nullptr;
-}
+}}
 
-std::vector<std::string> getAllFunctionNames() {
+std::vector<std::string> getAllFunctionNames() {{
     std::vector<std::string> names;
-    for (const auto& func : FUNCTIONS) {
+    for (const auto& func : FUNCTIONS) {{
         names.push_back(func.name);
-    }
+    }}
     return names;
-}
+}}
+
+// Plugin Implementation Class
+const char* PluginImpl::getName() const {{{{
+    return PLUGIN_INFO.name.c_str();
+}}}}
+
+const char* PluginImpl::getVersion() const {{{{
+    return PLUGIN_INFO.version.c_str();
+}}}}
+
+const char* PluginImpl::getAuthor() const {{{{
+    return PLUGIN_INFO.author.c_str();
+}}}}
+
+const GLSLFunction* PluginImpl::findFunction(const std::string& name) const {{{{
+    return {namespace_name}::findFunction(name);
+}}}}
+
+std::vector<std::string> PluginImpl::getAllFunctionNames() const {{{{
+    return {namespace_name}::getAllFunctionNames();
+}}}}
+
+size_t PluginImpl::getFunctionCount() const {{{{
+    return FUNCTIONS.size();
+}}}}
+
+std::vector<std::string> PluginImpl::getFunctionsByCategory(const std::string& category) const {{
+    std::vector<std::string> result;
+    for (const auto& func : FUNCTIONS) {{
+        // Extract category from file path (e.g., "lighting/common/ggx.glsl" -> "lighting")
+        std::string funcCategory = func.filePath;
+        size_t pos = funcCategory.find('/');
+        if (pos != std::string::npos) {{
+            funcCategory = funcCategory.substr(0, pos);
+        }} else {{
+            funcCategory = "misc";
+        }}
+        
+        if (funcCategory == category) {{
+            result.push_back(func.name);
+        }}
+    }}
+    return result;
+}}
+
+std::vector<std::string> PluginImpl::getAvailableCategories() const {{
+    std::set<std::string> categories;
+    for (const auto& func : FUNCTIONS) {{
+        // Extract category from file path
+        std::string funcCategory = func.filePath;
+        size_t pos = funcCategory.find('/');
+        if (pos != std::string::npos) {{
+            funcCategory = funcCategory.substr(0, pos);
+        }} else {{
+            funcCategory = "misc";
+        }}
+        categories.insert(funcCategory);
+    }}
+    return std::vector<std::string>(categories.begin(), categories.end());
+}}
+
+std::vector<const GLSLFunction*> PluginImpl::findFunctionsByReturnType(const std::string& returnType) const {{
+    std::vector<const GLSLFunction*> result;
+    for (const auto& func : FUNCTIONS) {{
+        for (const auto& overload : func.overloads) {{
+            if (overload.returnType == returnType) {{
+                result.push_back(&func);
+                break; // Don't add same function multiple times
+            }}
+        }}
+    }}
+    return result;
+}}
+
+std::vector<const GLSLFunction*> PluginImpl::findFunctionsByParameterCount(size_t paramCount) const {{
+    std::vector<const GLSLFunction*> result;
+    for (const auto& func : FUNCTIONS) {{
+        for (const auto& overload : func.overloads) {{
+            if (overload.paramTypes.size() == paramCount) {{
+                result.push_back(&func);
+                break; // Don't add same function multiple times
+            }}
+        }}
+    }}
+    return result;
+}}
 
 """)
-            f.write(f"}} // namespace {namespace_name}\n")
+            f.write(f"}} // namespace {namespace_name}\n\n")
+            
+            # C Interface Implementation
+            f.write(f"""// C Interface for Dynamic Loading
+extern "C" {{
+
+__attribute__((visibility("default")))
+IPluginInterface* createPlugin() {{
+    return new {namespace_name}::PluginImpl();
+}}
+
+__attribute__((visibility("default")))
+void destroyPlugin(IPluginInterface* plugin) {{
+    delete plugin;
+}}
+
+__attribute__((visibility("default")))
+const char* getPluginInfo() {{
+    return "{plugin_info.name} v{plugin_info.version} by {plugin_info.author}";
+}}
+
+__attribute__((visibility("default")))
+int getPluginABIVersion() {{
+    return 1;
+}}
+
+}}
+""")
         
         return str(output_path)
     
@@ -421,13 +564,11 @@ std::vector<std::string> getAllFunctionNames() {
         # Generate output files
         header_path = self.generate_cpp_header()
         impl_path = self.generate_cpp_implementation()
-        plugin_impl_path = self.generate_plugin_implementation()
         cmake_path = self.generate_cmake_file()
         setup_script_path = self.generate_git_setup_script()
         
         print(f"Generated: {header_path}")
         print(f"Generated: {impl_path}")
-        print(f"Generated: {plugin_impl_path}")
         print(f"Generated: {cmake_path}")
         print(f"Generated: {setup_script_path}")
         
@@ -476,28 +617,6 @@ public:
 }};
 
 }} // namespace {namespace_name}
-
-// C interface implementation
-extern "C" {{
-    IPluginInterface* createPlugin() {{
-        return new {namespace_name}::{impl_class_name}();
-    }}
-    
-    void destroyPlugin(IPluginInterface* plugin) {{
-        delete plugin;
-    }}
-    
-    const char* getPluginInfo() {{
-        static std::string info = {namespace_name}::PLUGIN_INFO.name + ":" + 
-                                 {namespace_name}::PLUGIN_INFO.version + ":" + 
-                                 {namespace_name}::PLUGIN_INFO.author;
-        return info.c_str();
-    }}
-    
-    int getPluginABIVersion() {{
-        return PLUGIN_ABI_VERSION;
-    }}
-}}
 """)
         
         print(f"Generated plugin implementation: {output_path}")
@@ -526,7 +645,6 @@ endif()
 # Create shared library
 add_library({plugin_name} SHARED
     {plugin_name}.cpp
-    {plugin_name}Impl.cpp
 )
 
 # Link with interface
@@ -541,8 +659,13 @@ set_target_properties({plugin_name} PROPERTIES
 
 # Compiler flags for shared library
 target_compile_options({plugin_name} PRIVATE
-    -fvisibility=hidden
     -fPIC
+)
+
+# Set visibility for C++ classes to hidden, but allow C interface to be visible
+set_target_properties({plugin_name} PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
 )
 
 # Export symbols for plugin interface
