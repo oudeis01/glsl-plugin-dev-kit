@@ -335,6 +335,8 @@ public:
     const char* getName() const override;
     const char* getVersion() const override;
     const char* getAuthor() const override;
+    const PluginInfo& getPluginInfo() const override;
+    const char* getPath() const override;
     
     // Function search
     const GLSLFunction* findFunction(const std::string& name) const override;
@@ -434,6 +436,15 @@ const char* PluginImpl::getVersion() const {{{{
 const char* PluginImpl::getAuthor() const {{{{
     return PLUGIN_INFO.author.c_str();
 }}}}
+
+const PluginInfo& PluginImpl::getPluginInfo() const {{
+    return PLUGIN_INFO;
+}}
+
+const char* PluginImpl::getPath() const {{
+    static const std::string plugin_path = "bin/data/{self.plugin_name}/";
+    return plugin_path.c_str();
+}}
 
 const GLSLFunction* PluginImpl::findFunction(const std::string& name) const {{{{
     return {namespace_name}::findFunction(name);
