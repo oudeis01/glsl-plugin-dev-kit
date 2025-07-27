@@ -31,12 +31,15 @@ class PluginInfo:
     author: str = "Unknown"
 
 class GLSLParser:
-    def __init__(self, plugin_name: str, input_root: str, output_dir: str, version: str = "0.0.1", author: str = "Unknown"):
+    def __init__(self, plugin_name: str, input_root: str, output_dir: str, version: str = "0.0.1", author: str = "Unknown", 
+                 split_files: bool = True, max_functions_per_file: int = 50):
         self.input_root = Path(input_root)
         self.output_dir = Path(output_dir)
         self.plugin_name = plugin_name
         self.version = version
         self.author = author
+        self.split_files = split_files
+        self.max_functions_per_file = max_functions_per_file
         
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -330,13 +333,20 @@ std::vector<std::string> getAllFunctionNames();
 
 // Plugin Implementation Class
 class PluginImpl : public IPluginInterface {{
+private:
+    mutable std::string plugin_data_path;
+    
 public:
+    // 기본 생성자
+    PluginImpl() : plugin_data_path("") {{}}
+    
     // Plugin information
     const char* getName() const override;
     const char* getVersion() const override;
     const char* getAuthor() const override;
     const PluginInfo& getPluginInfo() const override;
     const char* getPath() const override;
+    void setPath(const std::string& path) override;
     
     // Function search
     const GLSLFunction* findFunction(const std::string& name) const override;
@@ -365,10 +375,15 @@ extern "C" {{
         
         return str(output_path)
     
-    def generate_cpp_implementation(self, output_filename: str = None) -> str:
-        """Generate optimized C++ implementation file (Step 1 + Step 2 hybrid)"""
+    def generate_cpp_implementation(self, output_filename: str = None, split_files: bool = True, max_functions_per_file: int = 50) -> str:
+        """Generate optimized C++ implementation file (with optional splitting for large files)"""
         if not output_filename:
             output_filename = f"{self.plugin_name.title()}Plugin.cpp"
+        
+        # Check if we need to split files
+        function_count = len(self.functions)
+        if split_files and function_count > max_functions_per_file:
+            return self.generate_split_cpp_implementation(output_filename, max_functions_per_file)
         
         output_path = self.output_dir / output_filename
         header_filename = f"{self.plugin_name.title()}Plugin.h"
@@ -442,8 +457,11 @@ const PluginInfo& PluginImpl::getPluginInfo() const {{
 }}
 
 const char* PluginImpl::getPath() const {{
-    static const std::string plugin_path = "bin/data/{self.plugin_name}/";
-    return plugin_path.c_str();
+    return plugin_data_path.c_str();
+}}
+
+void PluginImpl::setPath(const std::string& path) {{
+    plugin_data_path = path;
 }}
 
 const GLSLFunction* PluginImpl::findFunction(const std::string& name) const {{{{
@@ -551,6 +569,262 @@ int getPluginABIVersion() {{
         
         return str(output_path)
     
+    def generate_split_cpp_implementation(self, base_filename: str, max_functions_per_file: int) -> str:
+        """
+        Generate split C++ implementation files for large plugins
+        
+        @param base_filename: Base filename for the main implementation file
+        @param max_functions_per_file: Maximum number of functions per split file
+        @return: Path to the main implementation file
+        """
+        header_filename = f"{self.plugin_name.title()}Plugin.h"
+        plugin_info = PluginInfo(name=self.plugin_name, version=self.version, author=self.author)
+        namespace_name = f"{self.plugin_name.title()}Plugin"
+        
+        # Sort functions by name for consistent splitting
+        sorted_functions = sorted(self.functions.items())
+        total_functions = len(sorted_functions)
+        
+        # Calculate number of split files needed
+        num_splits = (total_functions + max_functions_per_file - 1) // max_functions_per_file
+        
+        print(f"Splitting {total_functions} functions into {num_splits} files ({max_functions_per_file} functions per file)")
+        
+        # Generate split files for function data
+        split_file_paths = []
+        for i in range(num_splits):
+            start_idx = i * max_functions_per_file
+            end_idx = min((i + 1) * max_functions_per_file, total_functions)
+            chunk_functions = sorted_functions[start_idx:end_idx]
+            
+            split_filename = f"{self.plugin_name.title()}Plugin_Part{i+1}.cpp"
+            split_path = self.output_dir / split_filename
+            split_file_paths.append(split_filename)
+            
+            # Generate split file content
+            with open(split_path, 'w') as f:
+                f.write(f'/**\n * @file {split_filename}\n * @brief Auto-generated GLSL plugin implementation part {i+1}/{num_splits}\n * @note This file contains functions {start_idx+1}-{end_idx} of {total_functions}\n */\n\n')
+                f.write(f'#include "{header_filename}"\n\nnamespace {namespace_name} {{\n\n')
+                
+                # Function data for this chunk with explicit visibility
+                f.write(f"// Function data chunk {i+1}/{num_splits} (functions {start_idx+1}-{end_idx})\n")
+                f.write(f"__attribute__((visibility(\"default\")))\n")
+                f.write(f"extern const std::vector<GLSLFunction> FUNCTIONS_PART{i+1} = {{\n")
+                
+                for func_name, func_data in chunk_functions:
+                    # Generate overloads code
+                    overloads_code = "{"
+                    for sig in func_data.overloads:
+                        param_list = ', '.join(f'"{p}"' for p in sig.param_types)
+                        overloads_code += f'FunctionOverload("{sig.return_type}", {{{param_list}}}), '
+                    if overloads_code.endswith(', '):
+                        overloads_code = overloads_code[:-2]  # Remove trailing comma
+                    overloads_code += "}"
+                    
+                    f.write(f'    GLSLFunction("{func_name}", "{func_data.file_path}", {overloads_code}),\n')
+                
+                f.write("};\n\n")
+                f.write("} // namespace\n")
+            
+            print(f"Generated split file: {split_path}")
+        
+        # Generate main implementation file
+        output_path = self.output_dir / base_filename
+        with open(output_path, 'w') as f:
+            f.write(f'/**\n * @file {base_filename}\n * @brief Auto-generated GLSL plugin main implementation\n * @note This plugin uses {num_splits} split files for {total_functions} functions\n */\n\n')
+            f.write(f'#include "{header_filename}"\n#include <algorithm>\n#include <unordered_map>\n#include <set>\n\nnamespace {namespace_name} {{\n\n')
+            
+            # Include extern declarations for split file data
+            for i in range(num_splits):
+                f.write(f"extern const std::vector<GLSLFunction> FUNCTIONS_PART{i+1};\n")
+            f.write("\n")
+            
+            # Plugin info
+            f.write(f"""const PluginInfo PLUGIN_INFO("{plugin_info.name}", "{plugin_info.version}", "{plugin_info.author}");
+
+""")
+            
+            # Combine all functions from split files
+            f.write("// Combined function vector from all split files\n")
+            f.write("std::vector<GLSLFunction> createCombinedFunctions() {\n")
+            f.write("    std::vector<GLSLFunction> combined;\n")
+            f.write(f"    combined.reserve({total_functions});\n")
+            
+            for i in range(num_splits):
+                f.write(f"    combined.insert(combined.end(), FUNCTIONS_PART{i+1}.begin(), FUNCTIONS_PART{i+1}.end());\n")
+            
+            f.write("    return combined;\n")
+            f.write("}\n\n")
+            
+            f.write("// Lazy initialization of combined functions\n")
+            f.write("const std::vector<GLSLFunction>& getFunctions() {\n")
+            f.write("    static const std::vector<GLSLFunction> FUNCTIONS = createCombinedFunctions();\n")
+            f.write("    return FUNCTIONS;\n")
+            f.write("}\n\n")
+            
+            # Hash map for O(1) lookup
+            f.write("const std::unordered_map<std::string, const GLSLFunction*>& getFunctionMap() {\n")
+            f.write("    static std::unordered_map<std::string, const GLSLFunction*> FUNCTION_MAP;\n")
+            f.write("    static bool initialized = false;\n")
+            f.write("    if (!initialized) {\n")
+            f.write("        const auto& functions = getFunctions();\n")
+            f.write("        for (const auto& func : functions) {\n")
+            f.write("            FUNCTION_MAP[func.name] = &func;\n")
+            f.write("        }\n")
+            f.write("        initialized = true;\n")
+            f.write("    }\n")
+            f.write("    return FUNCTION_MAP;\n")
+            f.write("}\n\n")
+            
+            # Utility functions
+            f.write(f"""const GLSLFunction* findFunction(const std::string& name) {{
+    const auto& function_map = getFunctionMap();
+    auto it = function_map.find(name);
+    return (it != function_map.end()) ? it->second : nullptr;
+}}
+
+std::vector<std::string> getAllFunctionNames() {{
+    const auto& functions = getFunctions();
+    std::vector<std::string> names;
+    names.reserve(functions.size());
+    for (const auto& func : functions) {{
+        names.push_back(func.name);
+    }}
+    return names;
+}}
+
+// Plugin Implementation Class
+const char* PluginImpl::getName() const {{{{
+    return PLUGIN_INFO.name.c_str();
+}}}}
+
+const char* PluginImpl::getVersion() const {{{{
+    return PLUGIN_INFO.version.c_str();
+}}}}
+
+const char* PluginImpl::getAuthor() const {{{{
+    return PLUGIN_INFO.author.c_str();
+}}}}
+
+const PluginInfo& PluginImpl::getPluginInfo() const {{
+    return PLUGIN_INFO;
+}}
+
+const char* PluginImpl::getPath() const {{
+    return plugin_data_path.c_str();
+}}
+
+void PluginImpl::setPath(const std::string& path) {{
+    plugin_data_path = path;
+}}
+
+const GLSLFunction* PluginImpl::findFunction(const std::string& name) const {{{{
+    return {namespace_name}::findFunction(name);
+}}}}
+
+std::vector<std::string> PluginImpl::getAllFunctionNames() const {{{{
+    return {namespace_name}::getAllFunctionNames();
+}}}}
+
+size_t PluginImpl::getFunctionCount() const {{{{
+    return getFunctions().size();
+}}}}
+
+std::vector<std::string> PluginImpl::getFunctionsByCategory(const std::string& category) const {{
+    const auto& functions = getFunctions();
+    std::vector<std::string> result;
+    for (const auto& func : functions) {{
+        // Extract category from file path (e.g., "lighting/common/ggx.glsl" -> "lighting")
+        std::string funcCategory = func.filePath;
+        size_t pos = funcCategory.find('/');
+        if (pos != std::string::npos) {{
+            funcCategory = funcCategory.substr(0, pos);
+        }} else {{
+            funcCategory = "misc";
+        }}
+        
+        if (funcCategory == category) {{
+            result.push_back(func.name);
+        }}
+    }}
+    return result;
+}}
+
+std::vector<std::string> PluginImpl::getAvailableCategories() const {{
+    const auto& functions = getFunctions();
+    std::set<std::string> categories;
+    for (const auto& func : functions) {{
+        // Extract category from file path
+        std::string funcCategory = func.filePath;
+        size_t pos = funcCategory.find('/');
+        if (pos != std::string::npos) {{
+            funcCategory = funcCategory.substr(0, pos);
+        }} else {{
+            funcCategory = "misc";
+        }}
+        categories.insert(funcCategory);
+    }}
+    return std::vector<std::string>(categories.begin(), categories.end());
+}}
+
+std::vector<const GLSLFunction*> PluginImpl::findFunctionsByReturnType(const std::string& returnType) const {{
+    const auto& functions = getFunctions();
+    std::vector<const GLSLFunction*> result;
+    for (const auto& func : functions) {{
+        for (const auto& overload : func.overloads) {{
+            if (overload.returnType == returnType) {{
+                result.push_back(&func);
+                break; // Don't add same function multiple times
+            }}
+        }}
+    }}
+    return result;
+}}
+
+std::vector<const GLSLFunction*> PluginImpl::findFunctionsByParameterCount(size_t paramCount) const {{
+    const auto& functions = getFunctions();
+    std::vector<const GLSLFunction*> result;
+    for (const auto& func : functions) {{
+        for (const auto& overload : func.overloads) {{
+            if (overload.paramTypes.size() == paramCount) {{
+                result.push_back(&func);
+                break; // Don't add same function multiple times
+            }}
+        }}
+    }}
+    return result;
+}}
+
+}} // namespace {namespace_name}
+
+// C Interface Implementation
+extern "C" {{
+
+__attribute__((visibility("default")))
+IPluginInterface* createPlugin() {{
+    return new {namespace_name}::PluginImpl();
+}}
+
+__attribute__((visibility("default")))
+void destroyPlugin(IPluginInterface* plugin) {{
+    delete plugin;
+}}
+
+__attribute__((visibility("default")))
+const char* getPluginInfo() {{
+    return "{plugin_info.name} v{plugin_info.version} by {plugin_info.author}";
+}}
+
+__attribute__((visibility("default")))
+int getPluginABIVersion() {{
+    return 1;
+}}
+
+}}
+""")
+        
+        return str(output_path)
+    
     def run(self) -> None:
         """Main processing function"""
         print(f"Starting GLSL plugin generation for: {self.plugin_name}")
@@ -572,10 +846,10 @@ int getPluginABIVersion() {{
         print(f"Processed {len(self.processed_files)} files")
         print(f"Extracted {len(self.functions)} unique functions")
         
-        # Generate output files
+        # Generate output files with split configuration
         header_path = self.generate_cpp_header()
-        impl_path = self.generate_cpp_implementation()
-        cmake_path = self.generate_cmake_file()
+        impl_path = self.generate_cpp_implementation(split_files=self.split_files, max_functions_per_file=self.max_functions_per_file)
+        cmake_path = self.generate_cmake_file(split_files=self.split_files, max_functions_per_file=self.max_functions_per_file)
         setup_script_path = self.generate_git_setup_script()
         
         print(f"Generated: {header_path}")
@@ -633,10 +907,14 @@ public:
         print(f"Generated plugin implementation: {output_path}")
         return str(output_path)
 
-    def generate_cmake_file(self) -> str:
+    def generate_cmake_file(self, split_files: bool = True, max_functions_per_file: int = 50) -> str:
         """Generate CMakeLists.txt for building the plugin as shared library"""
         cmake_path = self.output_dir / "CMakeLists.txt"
         plugin_name = f"{self.plugin_name.title()}Plugin"
+        
+        # Determine if we need split files
+        function_count = len(self.functions)
+        use_split_files = split_files and function_count > max_functions_per_file
         
         with open(cmake_path, 'w') as f:
             f.write(f"""cmake_minimum_required(VERSION 3.16)
@@ -653,9 +931,27 @@ else()
     message(FATAL_ERROR "glsl-plugin-interface not found. Please run: git submodule update --init")
 endif()
 
-# Create shared library
+""")
+            
+            # Source files list
+            f.write(f"# Source files\n")
+            f.write(f"set(PLUGIN_SOURCES\n")
+            f.write(f"    {plugin_name}.cpp\n")
+            
+            if use_split_files:
+                # Calculate number of split files
+                num_splits = (function_count + max_functions_per_file - 1) // max_functions_per_file
+                f.write(f"    # Split implementation files ({num_splits} parts for {function_count} functions)\n")
+                f.write(f")\n\n")
+                f.write(f"# Automatically find all split implementation files\n")
+                f.write(f"file(GLOB SPLIT_FILES \"{plugin_name}_Part*.cpp\")\n")
+                f.write(f"list(APPEND PLUGIN_SOURCES ${{SPLIT_FILES}})\n\n")
+            else:
+                f.write(f")\n\n")
+            
+            f.write(f"""# Create shared library
 add_library({plugin_name} SHARED
-    {plugin_name}.cpp
+    ${{PLUGIN_SOURCES}}
 )
 
 # Link with interface
@@ -673,10 +969,10 @@ target_compile_options({plugin_name} PRIVATE
     -fPIC
 )
 
-# Set visibility for C++ classes to hidden, but allow C interface to be visible
+# Set visibility for C++ classes to default to allow symbol access
 set_target_properties({plugin_name} PROPERTIES
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON
+    CXX_VISIBILITY_PRESET default
+    VISIBILITY_INLINES_HIDDEN OFF
 )
 
 # Export symbols for plugin interface
@@ -684,7 +980,13 @@ target_compile_definitions({plugin_name} PRIVATE
     PLUGIN_EXPORTS
 )
 
-# Install target
+""")
+            
+            if use_split_files:
+                f.write(f"# Split file configuration\n")
+                f.write(f"message(STATUS \"Building {plugin_name} with {num_splits} split files for {function_count} functions\")\n\n")
+            
+            f.write(f"""# Install target
 install(TARGETS {plugin_name}
     LIBRARY DESTINATION lib/plugins
 )
@@ -789,6 +1091,27 @@ Examples:
         help="Plugin author (default: Unknown)"
     )
     
+    parser.add_argument(
+        "--split-files",
+        action="store_true",
+        default=True,
+        help="Enable file splitting for large plugins (default: enabled)"
+    )
+    
+    parser.add_argument(
+        "--no-split-files",
+        action="store_true",
+        default=False,
+        help="Disable file splitting"
+    )
+    
+    parser.add_argument(
+        "--max-functions-per-file",
+        type=int,
+        default=50,
+        help="Maximum functions per split file (default: 50)"
+    )
+    
     return parser.parse_args()
 
 def main():
@@ -804,6 +1127,9 @@ def main():
         print(f"Error: Input path is not a directory: {input_path}")
         return 1
     
+    # Determine split files setting
+    split_files = args.split_files and not args.no_split_files
+    
     # Create parser and run
     try:
         parser = GLSLParser(
@@ -811,7 +1137,9 @@ def main():
             input_root=str(input_path),
             output_dir=args.output_dir,
             version=args.version,
-            author=args.author
+            author=args.author,
+            split_files=split_files,
+            max_functions_per_file=args.max_functions_per_file
         )
         parser.run()
         return 0
