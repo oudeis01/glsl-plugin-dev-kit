@@ -529,6 +529,7 @@ std::vector<std::string> getAllFunctionNames() {
         plugin_impl_path = self.generate_plugin_implementation()
         cmake_path = self.generate_cmake_file_split(impl_files)
         setup_script_path = self.generate_git_setup_script()
+        documentation_path = self.generate_markdown_documentation()
         
         print(f"Generated: {header_path}")
         print(f"Generated {len(impl_files)} implementation files:")
@@ -537,6 +538,7 @@ std::vector<std::string> getAllFunctionNames() {
         print(f"Generated: {plugin_impl_path}")
         print(f"Generated: {cmake_path}")
         print(f"Generated: {setup_script_path}")
+        print(f"Generated: {documentation_path}")
         
         # Print some statistics
         total_overloads = sum(len(func.overloads) for func in self.functions.values())
@@ -801,6 +803,152 @@ echo "make"
         
         print(f"Generated setup script: {script_path}")
         return str(script_path)
+
+    def generate_markdown_documentation(self, output_filename: str = None) -> str:
+        """Generate comprehensive markdown documentation for all available shader functions"""
+        if not output_filename:
+            output_filename = f"{self.plugin_name.title()}Plugin_Functions.md"
+        
+        output_path = self.output_dir / output_filename
+        
+        # Organize functions by category (based on file path)
+        categories = {}
+        for func_name, func_data in self.functions.items():
+            # Extract category from file path
+            file_path = func_data.file_path
+            if '/' in file_path:
+                category = file_path.split('/')[0]
+            else:
+                category = "misc"
+            
+            if category not in categories:
+                categories[category] = []
+            categories[category].append((func_name, func_data))
+        
+        # Sort categories and functions within each category
+        sorted_categories = sorted(categories.items())
+        for category, functions in sorted_categories:
+            functions.sort(key=lambda x: x[0])  # Sort by function name
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            # Write header
+            f.write(f"# {self.plugin_name.title()} Plugin - Available Shader Functions\n\n")
+            f.write(f"**Plugin Version**: {self.version}  \n")
+            f.write(f"**Author**: {self.author}  \n")
+            f.write(f"**Generated**: {self._get_current_date()}  \n")
+            f.write(f"**Total Functions**: {len(self.functions)}  \n\n")
+            
+            # Write table of contents
+            f.write("## Table of Contents\n\n")
+            for category, functions in sorted_categories:
+                f.write(f"- [{category.title()}](#{category.lower()}) ({len(functions)} functions)\n")
+            f.write("\n---\n\n")
+            
+            # Write overview statistics
+            f.write("## Overview\n\n")
+            f.write(f"This plugin provides **{len(self.functions)} GLSL shader functions** organized into **{len(categories)} categories**.\n\n")
+            
+            total_overloads = sum(len(func.overloads) for func in self.functions.values())
+            f.write(f"**Statistics**:\n")
+            f.write(f"- Total Functions: {len(self.functions)}\n")
+            f.write(f"- Total Function Overloads: {total_overloads}\n")
+            f.write(f"- Average Overloads per Function: {total_overloads/len(self.functions):.1f}\n")
+            f.write(f"- Categories: {len(categories)}\n\n")
+            
+            # Write category breakdown
+            f.write("**Functions by Category**:\n")
+            for category, functions in sorted_categories:
+                f.write(f"- **{category.title()}**: {len(functions)} functions\n")
+            f.write("\n---\n\n")
+            
+            # Write usage examples
+            f.write("## Usage Examples\n\n")
+            f.write("```cpp\n")
+            f.write("// Create shader from function\n")
+            f.write('auto shader = shader_manager->createShader("snoise", {"time", "st"});\n\n')
+            f.write("// With specific parameters\n")
+            f.write('auto shader = shader_manager->createShader("fbm", {"st.xy", "time", "4.0"});\n\n')
+            f.write("// Using swizzles\n")
+            f.write('auto shader = shader_manager->createShader("voronoi", {"st.x", "st.y", "time"});\n')
+            f.write("```\n\n")
+            f.write("---\n\n")
+            
+            # Write detailed function documentation for each category
+            f.write("## Function Reference\n\n")
+            
+            for category, functions in sorted_categories:
+                f.write(f"# {category.title()}\n")
+                f.write(f"*{len(functions)} functions*\n\n")
+                
+                # Create compact table for each category
+                f.write("| Function | Overloads | Return Type | Parameters | File |\n")
+                f.write("|----------|-----------|-------------|------------|------|\n")
+                
+                for func_name, func_data in functions:
+                    if func_data.overloads:
+                        # For multiple overloads, show each one in a separate row
+                        for i, overload in enumerate(func_data.overloads):
+                            params = ", ".join(overload.param_types) if overload.param_types else "void"
+                            file_name = func_data.file_path.split('/')[-1]  # Just filename
+                            
+                            if i == 0:  # First overload shows function name
+                                f.write(f"| **{func_name}** | {len(func_data.overloads)} | `{overload.return_type}` | `({params})` | `{file_name}` |\n")
+                            else:  # Additional overloads show empty function name
+                                f.write(f"| | | `{overload.return_type}` | `({params})` | |\n")
+                    else:
+                        file_name = func_data.file_path.split('/')[-1]
+                        f.write(f"| **{func_name}** | 0 | N/A | N/A | `{file_name}` |\n")
+                
+                f.write("\n")
+                
+                # Add usage examples for popular functions in this category
+                popular_functions = [name for name, _ in functions if name in ["snoise", "fbm", "voronoi", "cnoise", "random", "worley", "curl", "gnoise"]]
+                if popular_functions:
+                    f.write("**Popular Usage Examples**:\n")
+                    f.write("```cpp\n")
+                    for func_name in popular_functions[:3]:  # Show max 3 examples per category
+                        func_data = next((data for name, data in functions if name == func_name), None)
+                        if func_data and func_data.overloads:
+                            first_overload = func_data.overloads[0]
+                            if len(first_overload.param_types) == 1:
+                                f.write(f'createShader("{func_name}", {{"time"}});\n')
+                            elif len(first_overload.param_types) == 2:
+                                f.write(f'createShader("{func_name}", {{"st", "time"}});\n')
+                            elif len(first_overload.param_types) >= 3:
+                                f.write(f'createShader("{func_name}", {{"st", "time", "1.0"}});\n')
+                    f.write("```\n\n")
+                
+                f.write("---\n\n")
+            
+            # Write appendix
+            f.write("## Appendix\n\n")
+            f.write("### Supported Built-in Variables\n\n")
+            f.write("- `st` - Texture coordinates (vec2)\n")
+            f.write("- `time` - Elapsed time (float)\n")
+            f.write("- `resolution` - Screen resolution (vec2)\n\n")
+            
+            f.write("### Swizzle Support\n\n")
+            f.write("You can use GLSL swizzles in your arguments:\n")
+            f.write("- `st.x`, `st.y` - Individual components\n")
+            f.write("- `st.xy`, `st.yx` - Two-component swizzles\n")
+            f.write("- `resolution.x`, `resolution.y` - Resolution components\n\n")
+            
+            f.write("### Automatic Type Conversion\n\n")
+            f.write("The system automatically generates wrapper functions to convert between different argument types:\n")
+            f.write("- Combines individual floats into vectors: `(float, float)` → `vec2`\n")
+            f.write("- Handles literal constants: `1.0`, `0.5`, etc.\n")
+            f.write("- Resolves best matching function overload based on argument count\n\n")
+            
+            f.write("---\n\n")
+            f.write(f"*Documentation generated by GLSL Plugin Generator v{self.version}*\n")
+        
+        print(f"Generated documentation: {output_path}")
+        return str(output_path)
+    
+    def _get_current_date(self) -> str:
+        """Get current date in YYYY-MM-DD format"""
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d")
 
 def parse_arguments():
     """Parse command line arguments"""
