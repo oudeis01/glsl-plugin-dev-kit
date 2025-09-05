@@ -661,18 +661,34 @@ add_library({plugin_name} SHARED ${{PLUGIN_SOURCES}})
 # Link with interface
 target_link_libraries({plugin_name} PRIVATE GLSLPluginInterface)
 
-# Set library properties
-set_target_properties({plugin_name} PROPERTIES
-    PREFIX "lib"
-    SUFFIX ".so"
-    POSITION_INDEPENDENT_CODE ON
-)
-
-# Compiler flags for shared library
-target_compile_options({plugin_name} PRIVATE
-    -fvisibility=hidden
-    -fPIC
-)
+# Platform-specific library properties
+if(APPLE)
+    # macOS: use .dylib extension
+    set_target_properties({plugin_name} PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".dylib"
+        POSITION_INDEPENDENT_CODE ON
+        MACOSX_RPATH ON
+        INSTALL_RPATH "@loader_path"
+    )
+    target_compile_options({plugin_name} PRIVATE
+        -fvisibility=hidden
+        -fPIC
+    )
+elseif(UNIX AND NOT APPLE)
+    # Linux: use .so extension
+    set_target_properties({plugin_name} PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".so"
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_options({plugin_name} PRIVATE
+        -fvisibility=hidden
+        -fPIC
+    )
+else()
+    message(FATAL_ERROR "Unsupported platform - only Linux and macOS are supported")
+endif()
 
 # Export symbols for plugin interface
 target_compile_definitions({plugin_name} PRIVATE
@@ -725,18 +741,34 @@ add_library({plugin_name} SHARED
 # Link with interface
 target_link_libraries({plugin_name} PRIVATE GLSLPluginInterface)
 
-# Set library properties
-set_target_properties({plugin_name} PROPERTIES
-    PREFIX "lib"
-    SUFFIX ".so"
-    POSITION_INDEPENDENT_CODE ON
-)
-
-# Compiler flags for shared library
-target_compile_options({plugin_name} PRIVATE
-    -fvisibility=hidden
-    -fPIC
-)
+# Platform-specific library properties
+if(APPLE)
+    # macOS: use .dylib extension
+    set_target_properties({plugin_name} PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".dylib"
+        POSITION_INDEPENDENT_CODE ON
+        MACOSX_RPATH ON
+        INSTALL_RPATH "@loader_path"
+    )
+    target_compile_options({plugin_name} PRIVATE
+        -fvisibility=hidden
+        -fPIC
+    )
+elseif(UNIX AND NOT APPLE)
+    # Linux: use .so extension
+    set_target_properties({plugin_name} PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".so"
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_options({plugin_name} PRIVATE
+        -fvisibility=hidden
+        -fPIC
+    )
+else()
+    message(FATAL_ERROR "Unsupported platform - only Linux and macOS are supported")
+endif()
 
 # Export symbols for plugin interface
 target_compile_definitions({plugin_name} PRIVATE
